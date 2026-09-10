@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>업무 FAQ 검색</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f3f6fa; color: #172b43;
+    font: 16px/1.7 system-ui, "Malgun Gothic", sans-serif; }
+  main { max-width: 880px; margin: 48px auto; padding: 0 24px; }
+  h1 { font-size: 2rem; margin: 0 0 24px; }
+  .controls, article { background: white; border: 1px solid #d6dfe9;
+    border-radius: 14px; padding: 24px; }
+  label { display: block; font-weight: 700; margin-bottom: 8px; }
+  input, select, button { font: inherit; min-height: 48px;
+    border: 1px solid #9daec1; border-radius: 8px; padding: 10px 14px; }
+  input { width: 100%; background: white; color: inherit; }
+  .filters { display: flex; align-items: end; gap: 12px; margin-top: 16px; }
+  .category { flex: 1; }
+  select { width: 100%; background: white; color: inherit; }
+  button { background: #184fa5; color: white; border-color: #184fa5; cursor: pointer; }
+  button:hover { background: #103c83; }
+  :focus-visible { outline: 3px solid #327ce6; outline-offset: 3px; }
+  .result-heading { display: flex; align-items: baseline; gap: 12px;
+    flex-wrap: wrap; margin: 26px 0 14px; }
+  h2 { font-size: 1.125rem; margin: 0; }
+  #count { margin: 0; color: #465c74; }
+  #results { display: grid; gap: 12px; }
+  h3 { font-size: 1.125rem; margin: 0 0 12px; overflow-wrap: anywhere; }
+  .label { display: block; font-size: .875rem; font-weight: 700; color: #465c74; }
+  .answer { margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .badge { display: inline-block; border-radius: 6px; background: #eaf1fc;
+    padding: 2px 10px; font-size: .875rem; color: #19457e; }
+  mark { background: #ffdf80; color: #172b43; border-radius: 2px; }
+  #empty { padding: 32px 24px; background: white; border: 1px dashed #9daec1;
+    border-radius: 14px; text-align: center; }
+  #empty[hidden] { display: none; }
+  @media (max-width: 480px) {
+    main { margin: 24px auto; padding: 0 16px; }
+    .controls, article { padding: 18px; }
+    h1 { font-size: 1.65rem; }
+    .filters { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>업무 FAQ 검색</h1>
+  <section class="controls" aria-label="FAQ 검색 및 분류">
+    <label for="search">검색어</label>
+    <input id="search" type="search" placeholder="질문이나 키워드를 입력하세요."
+      autocomplete="off" aria-controls="results" aria-describedby="search-help">
+    <small id="search-help">질문·답변·분류에서 입력한 문구를 검색합니다.</small>
+    <div class="filters">
+      <div class="category">
+        <label for="category">분류</label>
+        <select id="category" aria-controls="results">
+          <option value="전체">전체</option>
+          <option value="교육">교육</option>
+          <option value="문서">문서</option>
+          <option value="IT">IT</option>
+          <option value="보안">보안</option>
+        </select>
+      </div>
+      <button id="show-all" type="button">전체보기</button>
+    </div>
+  </section>
+  <section aria-labelledby="result-title">
+    <div class="result-heading">
+      <h2 id="result-title">검색 결과</h2>
+      <p id="count" role="status" aria-live="polite" aria-atomic="true"></p>
+    </div>
+    <div id="results"></div>
+    <p id="empty" hidden>등록된 FAQ에서 답변을 찾을 수 없습니다.<br>관련 담당부서 또는 공식 안내자료를 확인해 주세요.</p>
+  </section>
+  <noscript>FAQ 검색을 사용하려면 브라우저에서 JavaScript를 활성화해 주세요.</noscript>
+</main>
+<script>
+"use strict";
+// 첨부 JSON 원문만 사용합니다. answer_seed를 수정하거나 확장하지 않습니다.
+const faqs = [
+  { category: "교육", question: "교육 신청은 어디에서 하나요?",
+    answer_seed: "교육 포털의 과정 검색 후 신청 메뉴를 사용합니다." },
+  { category: "교육", question: "신청한 교육을 취소하려면 어떻게 하나요?",
+    answer_seed: "신청내역에서 취소 가능 여부를 확인합니다." },
+  { category: "문서", question: "주간 업무보고에는 무엇을 넣어야 하나요?",
+    answer_seed: "주요 실적, 이슈, 다음 주 계획을 중심으로 작성합니다." },
+  { category: "IT", question: "사내 시스템 접속이 되지 않습니다.",
+    answer_seed: "네트워크, 브라우저, 계정 상태를 순서대로 확인합니다." },
+  { category: "보안", question: "ChatGPT에 내부 업무자료를 넣어도 되나요?",
+    answer_seed: "교육에서는 합성자료를 사용하고, 실제 자료는 조직의 보안 및 AI 사용 기준을 먼저 확인합니다." }
+];
+const search = document.getElementById("search");
+const category = document.getElementById("category");
+const results = document.getElementById("results");
+const count = document.getElementById("count");
+const empty = document.getElementById("empty");
+
+// HTML 문자열 삽입 없이 텍스트 노드와 mark로 안전하게 강조합니다.
+function highlight(element, text, keyword) {
+  if (!keyword) { element.textContent = text; return; }
+  const lower = text.toLowerCase();
+  let start = 0;
+  let index;
+  while ((index = lower.indexOf(keyword, start)) !== -1) {
+    element.append(document.createTextNode(text.slice(start, index)));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(index, index + keyword.length);
+    element.append(mark);
+    start = index + keyword.length;
+  }
+  element.append(document.createTextNode(text.slice(start)));
+}
+
+function render() {
+  const keyword = search.value.trim().toLowerCase();
+  const matched = faqs.filter(faq =>
+    (category.value === "전체" || faq.category === category.value) &&
+    [faq.question, faq.answer_seed, faq.category].some(text =>
+      text.toLowerCase().includes(keyword))
+  );
+  results.replaceChildren();
+  empty.hidden = matched.length !== 0;
+  count.textContent = `총 ${matched.length}건`;
+  count.removeAttribute("aria-label");
+  if (!matched.length) {
+    // 미등록 질문은 고정 안내문만 표시하며 답변을 생성하지 않습니다.
+    count.setAttribute("aria-label", "총 0건. " + empty.innerText.replace(/\n+/g, " "));
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  matched.forEach(faq => {
+    const article = document.createElement("article");
+    const question = document.createElement("h3");
+    const answer = document.createElement("p");
+    answer.className = "answer";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    const questionLabel = document.createElement("span");
+    questionLabel.className = "label";
+    questionLabel.textContent = "질문";
+    const answerLabel = document.createElement("span");
+    answerLabel.className = "label";
+    answerLabel.textContent = "답변";
+    const categoryLabel = document.createElement("span");
+    categoryLabel.className = "label";
+    categoryLabel.textContent = "분류";
+    highlight(question, faq.question, keyword);
+    highlight(answer, faq.answer_seed, keyword);
+    highlight(badge, faq.category, keyword);
+    article.append(questionLabel, question, answerLabel, answer, categoryLabel, badge);
+    fragment.append(article);
+  });
+  results.append(fragment);
+}
+search.addEventListener("input", render);
+category.addEventListener("change", render);
+document.getElementById("show-all").addEventListener("click", () => {
+  search.value = "";
+  category.value = "전체";
+  render();
+  search.focus();
+});
+render();
+</script>
+</body>
+</html>
